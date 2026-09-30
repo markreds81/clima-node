@@ -1,6 +1,6 @@
 # ClimaNode
 
-Nodo climatico basato su ESP32-WROOM-32: legge temperatura e umidità da un sensore DHT22, le mostra su un display LCD 16x2 ed espone gli ultimi valori rilevati tramite una semplice API HTTP in JSON.
+Nodo climatico basato su ESP32-WROOM-32: legge temperatura e umidità da un sensore DHT22, le mostra su un display LCD 16x2 ed espone gli ultimi valori rilevati tramite una semplice API HTTP in JSON e una dashboard web.
 
 ## Hardware
 
@@ -59,24 +59,37 @@ Apri `ClimaNode.ino` con l'Arduino IDE, seleziona la board ESP32-WROOM-32 e la p
 
 Al boot il device si connette al WiFi (log disponibile su Serial a 9600 baud) e, una volta connesso, avvia anche il responder mDNS, raggiungibile come `climanode.local` sulla rete locale.
 
+## Dashboard web
+
+Una volta connesso alla rete, aprendo `http://climanode.local/` (o l'IP stampato su Serial) nel browser è disponibile una dashboard single-page che mostra temperatura, umidità e stato della connessione WiFi (SSID, potenza del segnale, IP, canale), aggiornata automaticamente ogni 3 secondi.
+
 ## API
 
-Una volta connesso alla rete, il device espone un endpoint HTTP con gli ultimi valori rilevati:
+Il device espone anche due endpoint HTTP in JSON, usati dalla dashboard ma interrogabili anche direttamente:
 
 ```
 GET /api/v1/climate
 ```
 
-Risposta:
-
 ```json
 {"temperature":21.5,"humidity":48.2}
 ```
+
+```
+GET /api/v1/status
+```
+
+```json
+{"wifi":{"connected":true,"ssid":"NomeRete","rssi":-58,"ip":"192.168.1.50","channel":6}}
+```
+
+Se il device non è connesso al WiFi, `wifi.connected` risulta `false` e gli altri campi sono assenti.
 
 Esempio con `curl`, usando l'IP stampato su Serial oppure l'hostname mDNS:
 
 ```sh
 curl http://climanode.local/api/v1/climate
+curl http://climanode.local/api/v1/status
 ```
 
 ## Licenza

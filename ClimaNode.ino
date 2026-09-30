@@ -7,6 +7,7 @@
 
 #include "Timer.h"
 #include "Secrets.h"
+#include "Dashboard.h"
 
 #define DHT_PIN        21
 #define DHT_TYPE       DHT22
@@ -67,6 +68,24 @@ void handleClimateRequest() {
   httpServer.send(200, "application/json", payload);
 }
 
+void handleStatusRequest() {
+  char payload[256];
+
+  if (WiFi.status() == WL_CONNECTED) {
+    snprintf(payload, sizeof(payload),
+             "{\"wifi\":{\"connected\":true,\"ssid\":\"%s\",\"rssi\":%d,\"ip\":\"%s\",\"channel\":%d}}",
+             WiFi.SSID().c_str(), WiFi.RSSI(), WiFi.localIP().toString().c_str(), WiFi.channel());
+  } else {
+    snprintf(payload, sizeof(payload), "{\"wifi\":{\"connected\":false}}");
+  }
+
+  httpServer.send(200, "application/json", payload);
+}
+
+void handleDashboardRequest() {
+  httpServer.send(200, "text/html", DASHBOARD_HTML);
+}
+
 void startMdns() {
   if (mdnsStarted) {
     return;
@@ -91,7 +110,9 @@ void setup() {
   linkTimer.begin(1000L);
   pollTimer.begin(2000L);
 
+  httpServer.on("/", HTTP_GET, handleDashboardRequest);
   httpServer.on("/api/v1/climate", HTTP_GET, handleClimateRequest);
+  httpServer.on("/api/v1/status", HTTP_GET, handleStatusRequest);
   httpServer.begin();
 }
 
