@@ -1,0 +1,8 @@
+Secrets.h
+.env
+
+.DS_Store
+*.swp
+
+build/
+.pio/
