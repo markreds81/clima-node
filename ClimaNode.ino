@@ -3,13 +3,15 @@
 #include <WiFi.h>
 #include <WiFiMulti.h>
 #include <WebServer.h>
+#include <ESPmDNS.h>
 
 #include "Timer.h"
 #include "Secrets.h"
 
-#define DHT_PIN    21
-#define DHT_TYPE   DHT22
-#define HTTP_PORT  80
+#define DHT_PIN        21
+#define DHT_TYPE       DHT22
+#define HTTP_PORT      80
+#define MDNS_HOSTNAME  "climanode"
 
 DHT dht(DHT_PIN, DHT_TYPE);
 LiquidCrystal lcd(19, 23, 18, 17, 16, 15);
@@ -20,6 +22,7 @@ Timer pollTimer;
 
 const uint32_t connectTimeoutMs = 10000;
 uint8_t wifiStatus = WL_NO_SHIELD;
+bool mdnsStarted = false;
 float humidity = 0.0f;
 float temperature = 0.0f;
 
@@ -64,6 +67,20 @@ void handleClimateRequest() {
   httpServer.send(200, "application/json", payload);
 }
 
+void startMdns() {
+  if (mdnsStarted) {
+    return;
+  }
+
+  if (MDNS.begin(MDNS_HOSTNAME)) {
+    MDNS.addService("http", "tcp", HTTP_PORT);
+    mdnsStarted = true;
+    Serial.printf("[MDNS] Responder started: http://%s.local/\n", MDNS_HOSTNAME);
+  } else {
+    Serial.println("[MDNS] Error starting responder.");
+  }
+}
+
 void setup() {
   Serial.begin(9600);
   dht.begin();  
@@ -91,6 +108,7 @@ void loop() {
 					Serial.printf("[WIFI] SSID: %s\n", WiFi.SSID().c_str());
 					Serial.printf("[WIFI] BSSID: %s\n", WiFi.BSSIDstr().c_str());
 					Serial.printf("[WIFI] Channel: %d\n", WiFi.channel());
+					startMdns();
 					break;
 				case WL_NO_SSID_AVAIL:
 					Serial.println("[WIFI] Connecting Failed AP not found.");
