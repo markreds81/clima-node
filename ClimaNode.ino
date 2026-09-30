@@ -2,16 +2,19 @@
 #include <LiquidCrystal.h>
 #include <WiFi.h>
 #include <WiFiMulti.h>
+#include <WebServer.h>
 
 #include "Timer.h"
 #include "Secrets.h"
 
 #define DHT_PIN    21
 #define DHT_TYPE   DHT22
+#define HTTP_PORT  80
 
 DHT dht(DHT_PIN, DHT_TYPE);
 LiquidCrystal lcd(19, 23, 18, 17, 16, 15);
 WiFiMulti wifiMulti;
+WebServer httpServer(HTTP_PORT);
 Timer linkTimer;
 Timer pollTimer;
 
@@ -53,6 +56,14 @@ void readEnvironment() {
   lcd.print(" %      ");
 }
 
+void handleClimateRequest() {
+  char payload[64];
+  snprintf(payload, sizeof(payload),
+           "{\"temperature\":%.1f,\"humidity\":%.1f}",
+           temperature, humidity);
+  httpServer.send(200, "application/json", payload);
+}
+
 void setup() {
   Serial.begin(9600);
   dht.begin();  
@@ -62,6 +73,9 @@ void setup() {
   wifiMulti.addAP(WIFI_SSID_2, WIFI_PASS_2);
   linkTimer.begin(1000L);
   pollTimer.begin(2000L);
+
+  httpServer.on("/api/climate", HTTP_GET, handleClimateRequest);
+  httpServer.begin();
 }
 
 void loop() {
@@ -98,4 +112,6 @@ void loop() {
     pollTimer.reset();
     readEnvironment();
   }
+
+  httpServer.handleClient();
 }
