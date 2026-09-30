@@ -78,3 +78,7 @@ Esempio con `curl`, usando l'IP stampato su Serial oppure l'hostname mDNS:
 ```sh
 curl http://climanode.local/api/v1/climate
 ```
+
+## Licenza
+
+Distribuito sotto licenza [MIT](LICENSE).
