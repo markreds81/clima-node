@@ -7,18 +7,22 @@ Nodo climatico basato su ESP32-WROOM-32: legge temperatura e umidità da un sens
 - Scheda ESP32-WROOM-32
 - Sensore DHT22
 - Display LCD 16x2 (interfaccia parallela, driver HD44780 compatibile con `LiquidCrystal`)
+- Encoder rotativo con pulsante integrato (es. KY-040)
 
 ### Collegamenti
 
-| Componente      | Pin ESP32 |
-|-----------------|-----------|
-| DHT22 (data)    | GPIO 21   |
-| LCD RS          | GPIO 19   |
-| LCD E           | GPIO 23   |
-| LCD D4          | GPIO 18   |
-| LCD D5          | GPIO 17   |
-| LCD D6          | GPIO 16   |
-| LCD D7          | GPIO 15   |
+| Componente        | Pin ESP32 |
+|-------------------|-----------|
+| DHT22 (data)      | GPIO 21   |
+| LCD RS            | GPIO 19   |
+| LCD E             | GPIO 23   |
+| LCD D4            | GPIO 18   |
+| LCD D5            | GPIO 17   |
+| LCD D6            | GPIO 16   |
+| LCD D7            | GPIO 15   |
+| Encoder CLK       | GPIO 4    |
+| Encoder DT        | GPIO 22   |
+| Encoder SW (push) | GPIO 27   |
 
 ## Librerie richieste
 
@@ -26,6 +30,11 @@ Da installare tramite Library Manager dell'Arduino IDE:
 
 - **DHT sensor library** (Adafruit) — con la sua dipendenza **Adafruit Unified Sensor**
 - **LiquidCrystal** (libreria standard, inclusa con l'Arduino IDE)
+- **RotaryEncoder** (Matthias Hertel)
+
+Incluse direttamente nel progetto (nessuna installazione necessaria):
+
+- `Button` ([mrButton](https://github.com/markreds81/Button) di Mark Reds, vendorizzata come `Button.h`/`Button.cpp`)
 
 Già incluse nel core ESP32 (nessuna installazione necessaria, basta avere il core ESP32 installato tramite Boards Manager):
 
@@ -58,6 +67,15 @@ Le credenziali WiFi non sono versionate nel repository. Prima di compilare:
 Apri `ClimaNode.ino` con l'Arduino IDE, seleziona la board ESP32-WROOM-32 e la porta seriale corretta, quindi carica lo sketch.
 
 Al boot il device si connette al WiFi (log disponibile su Serial a 9600 baud) e, una volta connesso, avvia anche il responder mDNS, raggiungibile come `climanode.local` sulla rete locale.
+
+## Display LCD
+
+Il display mostra due schermate, alternabili ruotando l'encoder (ogni scatto passa dall'una all'altra):
+
+- **Clima**: temperatura e umidità rilevate dal DHT22.
+- **Rete**: indirizzo IP e stato della connessione WiFi.
+
+Il pulsante integrato nell'encoder è collegato (GPIO 27) ma al momento non ha alcuna funzione.
 
 ## Dashboard web
 

@@ -4,10 +4,12 @@
 #include <WiFiMulti.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
+#include <RotaryEncoder.h>
 
 #include "Timer.h"
 #include "Secrets.h"
 #include "Dashboard.h"
+#include "Button.h"
 
 #define LCD_RS            19
 #define LCD_EN            23
@@ -19,42 +21,32 @@
 #define DHT_TYPE          DHT22
 #define HTTP_PORT         80
 #define MDNS_HOSTNAME     "climanode"
+#define ROTARY_CLK        4
+#define ROTARY_DT         22
+#define ROTARY_SW         27
 
 DHT dht(DHT_PIN, DHT_TYPE);
 LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
+RotaryEncoder rot(ROTARY_CLK, ROTARY_DT, RotaryEncoder::LatchMode::FOUR3);
+Button btn(ROTARY_SW);
 WiFiMulti wifiMulti;
 WebServer httpServer(HTTP_PORT);
 Timer linkTimer;
 Timer pollTimer;
+
+enum DisplayScreen {
+  SCREEN_CLIMATE,
+  SCREEN_NETWORK
+};
 
 const uint32_t connectTimeoutMs = 10000;
 uint8_t wifiStatus = WL_NO_SHIELD;
 bool mdnsStarted = false;
 float humidity = 0.0f;
 float temperature = 0.0f;
+DisplayScreen currentScreen = SCREEN_CLIMATE;
 
-void readEnvironment() {
-  float newHumidity = dht.readHumidity();
-  float newTemperature = dht.readTemperature();
-
-  if (isnan(newHumidity) || isnan(newTemperature)) {
-    Serial.println("Errore: lettura sensore non valida");
-    lcd.setCursor(0, 0);
-    lcd.print("Errore sensore  ");
-    lcd.setCursor(0, 1);
-    lcd.print("Dati non validi ");
-    return;
-  }
-
-  humidity = newHumidity;
-  temperature = newTemperature;
-
-  Serial.print("Umidità: ");
-  Serial.print(humidity, 1);
-  Serial.print("%, Temperatura: ");
-  Serial.print(temperature, 1);
-  Serial.println("° Celsius");
-
+void renderClimateScreen() {
   lcd.setCursor(0, 0);
   lcd.print("Tmp: ");
   lcd.print(temperature, 1);
@@ -64,6 +56,61 @@ void readEnvironment() {
   lcd.print("Hum: ");
   lcd.print(humidity, 1);
   lcd.print(" %      ");
+}
+
+void renderNetworkScreen() {
+  lcd.setCursor(0, 0);
+  if (WiFi.status() == WL_CONNECTED) {
+    lcd.print(WiFi.localIP().toString());
+    lcd.print("                ");
+  } else {
+    lcd.print("IP non disp.    ");
+  }
+
+  lcd.setCursor(0, 1);
+  lcd.print(WiFi.status() == WL_CONNECTED ? "WiFi: Connesso  " : "WiFi: Assente   ");
+}
+
+void renderDisplay() {
+  switch (currentScreen) {
+    case SCREEN_CLIMATE:
+      renderClimateScreen();
+      break;
+    case SCREEN_NETWORK:
+      renderNetworkScreen();
+      break;
+  }
+}
+
+void readEnvironment() {
+  float newHumidity = dht.readHumidity();
+  float newTemperature = dht.readTemperature();
+
+  if (isnan(newHumidity) || isnan(newTemperature)) {
+    Serial.println("Errore: lettura sensore non valida");
+    if (currentScreen == SCREEN_CLIMATE) {
+      lcd.setCursor(0, 0);
+      lcd.print("Errore sensore  ");
+      lcd.setCursor(0, 1);
+      lcd.print("Dati non validi ");
+    }
+    return;
+  }
+
+  humidity = newHumidity;
+  temperature = newTemperature;
+
+#ifdef DHT_DEBUG
+  Serial.print("Umidità: ");
+  Serial.print(humidity, 1);
+  Serial.print("%, Temperatura: ");
+  Serial.print(temperature, 1);
+  Serial.println("° Celsius");
+#endif
+
+  if (currentScreen == SCREEN_CLIMATE) {
+    renderClimateScreen();
+  }
 }
 
 void handleClimateRequest() {
@@ -108,7 +155,8 @@ void startMdns() {
 
 void setup() {
   Serial.begin(9600);
-  dht.begin();  
+  dht.begin();
+  btn.begin();
   lcd.begin(16, 2);
   WiFi.mode(WIFI_STA);
   wifiMulti.addAP(WIFI_SSID_1, WIFI_PASS_1);
@@ -123,6 +171,8 @@ void setup() {
 }
 
 void loop() {
+  static int pos = 0;
+
   if (linkTimer.expired()) {
     uint8_t status = wifiMulti.run(connectTimeoutMs);
     if (status != wifiStatus) {
@@ -149,6 +199,9 @@ void loop() {
 				default:
 					Serial.printf("[WIFI] Connecting Failed (%d).\n", status);
 			}
+			if (currentScreen == SCREEN_NETWORK) {
+				renderNetworkScreen();
+			}
 		}
     linkTimer.reset();
   }
@@ -156,6 +209,24 @@ void loop() {
   if (pollTimer.expired()) {
     pollTimer.reset();
     readEnvironment();
+  }
+
+  rot.tick();
+  int newPos = rot.getPosition();
+  if (pos != newPos) {
+    Serial.print("pos:");
+    Serial.print(newPos);
+    Serial.print(" dir:");
+    Serial.println((int)(rot.getDirection()));
+    pos = newPos;
+
+    currentScreen = (currentScreen == SCREEN_CLIMATE) ? SCREEN_NETWORK : SCREEN_CLIMATE;
+    lcd.clear();
+    renderDisplay();
+  }
+
+  if (btn.pressed()) {
+    Serial.println("Button PRESSED");
   }
 
   httpServer.handleClient();
