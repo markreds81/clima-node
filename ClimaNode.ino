@@ -74,7 +74,7 @@ void setup() {
   linkTimer.begin(1000L);
   pollTimer.begin(2000L);
 
-  httpServer.on("/api/climate", HTTP_GET, handleClimateRequest);
+  httpServer.on("/api/v1/climate", HTTP_GET, handleClimateRequest);
   httpServer.begin();
 }
 
