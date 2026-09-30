@@ -9,13 +9,19 @@
 #include "Secrets.h"
 #include "Dashboard.h"
 
-#define DHT_PIN        21
-#define DHT_TYPE       DHT22
-#define HTTP_PORT      80
-#define MDNS_HOSTNAME  "climanode"
+#define LCD_RS            19
+#define LCD_EN            23
+#define LCD_D4            18
+#define LCD_D5            17
+#define LCD_D6            16
+#define LCD_D7            15
+#define DHT_PIN           21
+#define DHT_TYPE          DHT22
+#define HTTP_PORT         80
+#define MDNS_HOSTNAME     "climanode"
 
 DHT dht(DHT_PIN, DHT_TYPE);
-LiquidCrystal lcd(19, 23, 18, 17, 16, 15);
+LiquidCrystal lcd(LCD_RS, LCD_EN, LCD_D4, LCD_D5, LCD_D6, LCD_D7);
 WiFiMulti wifiMulti;
 WebServer httpServer(HTTP_PORT);
 Timer linkTimer;
