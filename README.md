@@ -82,18 +82,20 @@ dns-sd -B _http._tcp
 
 ## Display LCD
 
-Il display mostra quattro schermate, che si scorrono ruotando l'encoder in entrambe le direzioni:
+Il display mostra sei schermate, che si scorrono ruotando l'encoder in entrambe le direzioni:
 
-- **Clima**: temperatura e umidità rilevate dal DHT22.
+- **Clima**: temperatura e umidità rilevate dal DHT22, indicate da due icone (termometro e goccia). In fondo a ogni riga una freccia indica la tendenza: ↑ in salita, ↓ in discesa, → stabile, calcolata confrontando la media dell'ultimo minuto con quella di 10 minuti prima (soglie: 0,3 °C e 2% di umidità). Nei primi minuti dopo l'avvio, finché lo storico non è sufficiente, la freccia non viene mostrata.
 - **Rete**: indirizzo IP e stato della connessione WiFi.
+- **Segnale**: qualità del segnale WiFi (ottimo, buono, discreto, scarso), una barra proporzionale e il valore RSSI in dBm, aggiornati ogni secondo.
 - **Data e ora**: data e ora correnti, sincronizzate via NTP (fuso Europe/Rome con ora legale automatica).
 - **Nodo**: ID del nodo (MAC di fabbrica) e hostname.
+- **Firmware**: versione del firmware installato.
 
 Il pulsante integrato nell'encoder è collegato (GPIO 27) ma al momento non ha alcuna funzione.
 
 ## Dashboard web
 
-Una volta connesso alla rete, aprendo `http://climanode-XXXXXX.local/` (o l'IP stampato su Serial) nel browser è disponibile una dashboard single-page che mostra ID del nodo, data e ora del device, temperatura, umidità e stato della connessione WiFi (SSID, potenza del segnale, IP, canale), aggiornata automaticamente ogni 3 secondi.
+Una volta connesso alla rete, aprendo `http://climanode-XXXXXX.local/` (o l'IP stampato su Serial) nel browser è disponibile una dashboard single-page che mostra ID del nodo, versione del firmware, data e ora del device, temperatura e umidità con la relativa tendenza, e stato della connessione WiFi (SSID, potenza del segnale, IP, canale), aggiornata automaticamente ogni 3 secondi.
 
 ## API
 
@@ -104,15 +106,17 @@ GET /api/v1/climate
 ```
 
 ```json
-{"id":"a1b2c3d4e5f6","temperature":21.5,"humidity":48.2}
+{"id":"a1b2c3d4e5f6","temperature":21.5,"humidity":48.2,"trend":{"temperature":"up","humidity":"steady"}}
 ```
+
+`trend` indica la tendenza di ciascun valore negli ultimi 10 minuti (come le frecce sul display): `up`, `down`, `steady`, oppure `unknown` nei primi minuti dopo l'avvio.
 
 ```
 GET /api/v1/status
 ```
 
 ```json
-{"id":"a1b2c3d4e5f6","wifi":{"connected":true,"ssid":"NomeRete","rssi":-58,"ip":"192.168.1.50","channel":6},"time":{"synced":true,"local":"2026-10-01T14:05:32"}}
+{"id":"a1b2c3d4e5f6","firmware":"1.0a","wifi":{"connected":true,"ssid":"NomeRete","rssi":-58,"ip":"192.168.1.50","channel":6},"time":{"synced":true,"local":"2026-10-01T14:05:32"}}
 ```
 
 Se il device non è connesso al WiFi, `wifi.connected` risulta `false` e gli altri campi sono assenti. `time.local` è l'ora locale del device in formato ISO 8601 senza offset; finché l'ora non è sincronizzata via NTP `time.synced` risulta `false` e `local` è assente.

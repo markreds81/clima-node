@@ -36,6 +36,8 @@ const char DASHBOARD_HTML[] = R"HTML(
   .card { background: var(--card); border-radius: 16px; padding: 20px; text-align: center; }
   .card .value { font-size: 2.4rem; font-weight: 700; }
   .card .unit { font-size: 1.2rem; color: var(--muted); }
+  .card .trend { font-size: 1.4rem; margin-left: 6px; color: var(--accent); }
+  .card .trend.steady { color: var(--muted); }
   .card .label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; margin-top: 4px; }
   .clock { width: 100%; max-width: 480px; margin-bottom: 16px; background: var(--card); border-radius: 16px; padding: 20px; text-align: center; }
   .clock .time { font-size: 2.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
@@ -61,7 +63,7 @@ const char DASHBOARD_HTML[] = R"HTML(
 </head>
 <body>
   <h1>ClimaNode</h1>
-  <div class="subtitle">Dashboard ambientale<span id="nodeId"></span></div>
+  <div class="subtitle">Dashboard ambientale<span id="nodeId"></span><span id="firmware"></span></div>
 
   <div class="clock">
     <div class="time" id="clockTime">--:--:--</div>
@@ -128,6 +130,18 @@ function tickClock() {
   clockTimer = setTimeout(tickClock, delay);
 }
 
+const TRENDS = {
+  up:     { symbol: '&uarr;', title: 'In salita' },
+  down:   { symbol: '&darr;', title: 'In discesa' },
+  steady: { symbol: '&rarr;', title: 'Stabile' }
+};
+
+// Freccia di tendenza (ultimi 10 minuti); vuota finché lo storico non è sufficiente
+function trendHtml(trend) {
+  const t = TRENDS[trend];
+  return t ? '<span class="trend ' + trend + '" title="' + t.title + ' negli ultimi 10 minuti">' + t.symbol + '</span>' : '';
+}
+
 async function refresh() {
   try {
     const [climateRes, statusRes] = await Promise.all([
@@ -137,8 +151,9 @@ async function refresh() {
     const climate = await climateRes.json();
     const status = await statusRes.json();
 
-    document.getElementById('temperature').innerHTML = climate.temperature.toFixed(1) + '<span class="unit">&deg;C</span>';
-    document.getElementById('humidity').innerHTML = climate.humidity.toFixed(1) + '<span class="unit">%</span>';
+    const trend = climate.trend || {};
+    document.getElementById('temperature').innerHTML = climate.temperature.toFixed(1) + '<span class="unit">&deg;C</span>' + trendHtml(trend.temperature);
+    document.getElementById('humidity').innerHTML = climate.humidity.toFixed(1) + '<span class="unit">%</span>' + trendHtml(trend.humidity);
 
     if (status.time && status.time.synced) {
       // L'ora ricevuta è troncata al secondo: riallinea solo se lo scarto è
@@ -155,6 +170,7 @@ async function refresh() {
     tickClock();
 
     document.getElementById('nodeId').textContent = ' \u00b7 ' + status.id;
+    document.getElementById('firmware').textContent = status.firmware ? ' \u00b7 firmware ' + status.firmware : '';
 
     const wifi = status.wifi;
     const dot = document.getElementById('wifiDot');

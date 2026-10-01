@@ -10,6 +10,8 @@
 #include "Secrets.h"
 #include "Dashboard.h"
 #include "Button.h"
+#include "Trend.h"
+#include "Glyphs.h"
 
 #define LCD_RS            19
 #define LCD_EN            23
@@ -21,6 +23,7 @@
 #define DHT_TYPE          DHT22
 #define HTTP_PORT         80
 #define HOSTNAME_PREFIX   "climanode"
+#define FIRMWARE_VERSION  "1.0a"
 #define ROTARY_CLK        4
 #define ROTARY_DT         22
 #define ROTARY_SW         27
@@ -37,12 +40,20 @@ AsyncWebServer httpServer(HTTP_PORT);
 Timer linkTimer;
 Timer pollTimer;
 Timer clockTimer;
+Timer trendTimer;
+Trend temperatureTrend(0.3f);  // °C in TREND_WINDOW_MIN minuti
+Trend humidityTrend(2.0f);     // % in TREND_WINDOW_MIN minuti
+// Copia delle tendenze per gli handler HTTP, aggiornata dal loop() a ogni commit
+volatile TrendDirection temperatureDirection = TREND_UNKNOWN;
+volatile TrendDirection humidityDirection = TREND_UNKNOWN;
 
 enum DisplayScreen {
   SCREEN_CLIMATE,
   SCREEN_NETWORK,
+  SCREEN_SIGNAL,
   SCREEN_TIME,
   SCREEN_NODE,
+  SCREEN_FIRMWARE,
   SCREEN_COUNT
 };
 
@@ -77,16 +88,37 @@ float humidity = 0.0f;
 float temperature = 0.0f;
 DisplayScreen currentScreen = SCREEN_CLIMATE;
 
-void renderClimateScreen() {
-  lcd.setCursor(0, 0);
-  lcd.print("Tmp: ");
-  lcd.print(temperature, 1);
-  lcd.print(" C      ");
+uint8_t trendSymbol(TrendDirection trend) {
+  switch (trend) {
+    case TREND_UP:
+      return ICON_TREND_UP;
+    case TREND_DOWN:
+      return ICON_TREND_DOWN;
+    case TREND_STEADY:
+      return LCD_RIGHT_ARROW;
+    default:
+      return ' ';
+  }
+}
 
-  lcd.setCursor(0, 1);
-  lcd.print("Hum: ");
-  lcd.print(humidity, 1);
-  lcd.print(" %      ");
+// Scrive una riga " <icona>  <valore>    <tendenza> " di 16 caratteri
+void printClimateLine(uint8_t row, uint8_t icon, const char *value, TrendDirection trend) {
+  lcd.setCursor(0, row);
+  lcd.print(' ');
+  lcd.write(icon);
+  lcd.printf(" %-11s", value);
+  lcd.write(trendSymbol(trend));
+  lcd.print(' ');
+}
+
+void renderClimateScreen() {
+  char value[14];
+
+  snprintf(value, sizeof(value), "%5.1f%cC", temperature, LCD_DEGREE);
+  printClimateLine(0, ICON_THERMOMETER, value, temperatureTrend.direction());
+
+  snprintf(value, sizeof(value), "%5.1f%%", humidity);
+  printClimateLine(1, ICON_DROP, value, humidityTrend.direction());
 }
 
 void renderNetworkScreen() {
@@ -100,6 +132,41 @@ void renderNetworkScreen() {
 
   lcd.setCursor(0, 1);
   lcd.print(WiFi.status() == WL_CONNECTED ? "WiFi: Connesso  " : "WiFi: Assente   ");
+}
+
+// Soglie RSSI allineate a quelle delle barre della dashboard
+const char *signalQuality(int rssi) {
+  if (rssi >= -55) return "ottimo";
+  if (rssi >= -65) return "buono";
+  if (rssi >= -75) return "discreto";
+  return "scarso";
+}
+
+void renderSignalScreen() {
+  char line[17];
+
+  if (WiFi.status() != WL_CONNECTED) {
+    lcd.setCursor(0, 0);
+    lcd.print("Segnale WiFi    ");
+    lcd.setCursor(0, 1);
+    lcd.print("Non connesso    ");
+    return;
+  }
+
+  int rssi = WiFi.RSSI();
+  snprintf(line, sizeof(line), "Segnale %-8s", signalQuality(rssi));
+  lcd.setCursor(0, 0);
+  lcd.print(line);
+
+  // Barra di 9 celle da -90 dBm (vuota) a -30 dBm (piena), poi il valore in dBm
+  const int barCells = 9;
+  int filled = constrain(map(rssi, -90, -30, 0, barCells), 0, barCells);
+  for (int i = 0; i < barCells; i++) {
+    line[i] = i < filled ? LCD_FULL_BLOCK : LCD_MIDDLE_DOT;
+  }
+  snprintf(line + barCells, sizeof(line) - barCells, "%4ddBm", rssi);
+  lcd.setCursor(0, 1);
+  lcd.print(line);
 }
 
 void renderTimeScreen() {
@@ -134,6 +201,16 @@ void renderNodeScreen() {
   lcd.print(line);
 }
 
+void renderFirmwareScreen() {
+  char line[17];
+  lcd.setCursor(0, 0);
+  lcd.print("ClimaNode       ");
+
+  snprintf(line, sizeof(line), "Firmware %-7s", FIRMWARE_VERSION);
+  lcd.setCursor(0, 1);
+  lcd.print(line);
+}
+
 void renderDisplay() {
   switch (currentScreen) {
     case SCREEN_CLIMATE:
@@ -142,11 +219,17 @@ void renderDisplay() {
     case SCREEN_NETWORK:
       renderNetworkScreen();
       break;
+    case SCREEN_SIGNAL:
+      renderSignalScreen();
+      break;
     case SCREEN_TIME:
       renderTimeScreen();
       break;
     case SCREEN_NODE:
       renderNodeScreen();
+      break;
+    case SCREEN_FIRMWARE:
+      renderFirmwareScreen();
       break;
   }
 }
@@ -168,6 +251,8 @@ void readEnvironment() {
 
   humidity = newHumidity;
   temperature = newTemperature;
+  humidityTrend.add(humidity);
+  temperatureTrend.add(temperature);
 
 #ifdef DHT_DEBUG
   Serial.print("Umidità: ");
@@ -199,18 +284,33 @@ void jsonEscape(const char *src, char *dst, size_t size) {
   dst[n] = '\0';
 }
 
+const char *trendName(TrendDirection trend) {
+  switch (trend) {
+    case TREND_UP:
+      return "up";
+    case TREND_DOWN:
+      return "down";
+    case TREND_STEADY:
+      return "steady";
+    default:
+      return "unknown";
+  }
+}
+
 void handleClimateRequest(AsyncWebServerRequest *request) {
-  char payload[96];
+  char payload[160];
   snprintf(payload, sizeof(payload),
-           "{\"id\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f}",
-           nodeId, temperature, humidity);
+           "{\"id\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f,"
+           "\"trend\":{\"temperature\":\"%s\",\"humidity\":\"%s\"}}",
+           nodeId, temperature, humidity,
+           trendName(temperatureDirection), trendName(humidityDirection));
   request->send(200, "application/json", payload);
 }
 
 void handleStatusRequest(AsyncWebServerRequest *request) {
   char wifi[320];
   char clock[64];
-  char payload[400];
+  char payload[448];
 
   if (WiFi.status() == WL_CONNECTED) {
     char ssid[32 * 6 + 1];  // SSID max 32 byte, ognuno al più \u00XX
@@ -232,7 +332,8 @@ void handleStatusRequest(AsyncWebServerRequest *request) {
     snprintf(clock, sizeof(clock), "{\"synced\":false}");
   }
 
-  snprintf(payload, sizeof(payload), "{\"id\":\"%s\",\"wifi\":%s,\"time\":%s}", nodeId, wifi, clock);
+  snprintf(payload, sizeof(payload), "{\"id\":\"%s\",\"firmware\":\"%s\",\"wifi\":%s,\"time\":%s}",
+           nodeId, FIRMWARE_VERSION, wifi, clock);
   request->send(200, "application/json", payload);
 }
 
@@ -343,8 +444,12 @@ void setup() {
   dht.begin();
   btn.begin();
   lcd.begin(16, 2);
+  lcd.createChar(ICON_THERMOMETER, thermometerGlyph);
+  lcd.createChar(ICON_DROP, dropGlyph);
+  lcd.createChar(ICON_TREND_UP, trendUpGlyph);
+  lcd.createChar(ICON_TREND_DOWN, trendDownGlyph);
   initNodeIdentity();
-  Serial.printf("[NODE] ID: %s, hostname: %s\n", nodeId, hostname);
+  Serial.printf("[NODE] ID: %s, hostname: %s, firmware: %s\n", nodeId, hostname, FIRMWARE_VERSION);
   // Va impostato prima di avviare il WiFi per essere usato anche dal DHCP
   WiFi.setHostname(hostname);
   WiFi.mode(WIFI_STA);
@@ -359,6 +464,7 @@ void setup() {
   linkTimer.begin(1000L);
   pollTimer.begin(2000L);
   clockTimer.begin(250L);
+  trendTimer.begin(60000L);
 
   httpServer.on("/", HTTP_GET, handleDashboardRequest);
   httpServer.on("/api/v1/climate", HTTP_GET, handleClimateRequest);
@@ -401,12 +507,26 @@ void loop() {
 				renderNetworkScreen();
 			}
 		}
+    if (currentScreen == SCREEN_SIGNAL) {
+      renderSignalScreen();
+    }
     linkTimer.reset();
   }
 
   if (pollTimer.expired()) {
     pollTimer.reset();
     readEnvironment();
+  }
+
+  if (trendTimer.expired()) {
+    trendTimer.reset();
+    temperatureTrend.commit();
+    humidityTrend.commit();
+    temperatureDirection = temperatureTrend.direction();
+    humidityDirection = humidityTrend.direction();
+    if (currentScreen == SCREEN_CLIMATE) {
+      renderClimateScreen();
+    }
   }
 
   if (clockTimer.expired()) {
