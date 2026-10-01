@@ -31,6 +31,7 @@ Da installare tramite Library Manager dell'Arduino IDE:
 - **DHT sensor library** (Adafruit) — con la sua dipendenza **Adafruit Unified Sensor**
 - **LiquidCrystal** (libreria standard, inclusa con l'Arduino IDE)
 - **RotaryEncoder** (Matthias Hertel)
+- **ESP Async WebServer** (ESP32Async) — con la sua dipendenza **Async TCP** (ESP32Async)
 
 Incluse direttamente nel progetto (nessuna installazione necessaria):
 
@@ -39,8 +40,6 @@ Incluse direttamente nel progetto (nessuna installazione necessaria):
 Già incluse nel core ESP32 (nessuna installazione necessaria, basta avere il core ESP32 installato tramite Boards Manager):
 
 - `WiFi`
-- `WiFiMulti`
-- `WebServer`
 - `ESPmDNS`
 
 ## Setup credenziali WiFi
@@ -51,7 +50,7 @@ Le credenziali WiFi non sono versionate nel repository. Prima di compilare:
    ```sh
    cp Secrets.h.example Secrets.h
    ```
-2. Modifica `Secrets.h` inserendo SSID e password delle reti WiFi disponibili (sono supportate fino a due reti, gestite con fallback automatico da `WiFiMulti`):
+2. Modifica `Secrets.h` inserendo SSID e password delle reti WiFi disponibili (sono supportate fino a due reti, il nodo si connette a quella con il segnale migliore e, se la connessione cade, riprova automaticamente senza bloccare display e sensore):
    ```cpp
    #define WIFI_SSID_1  "NomeRete1"
    #define WIFI_PASS_1  "Password1"
