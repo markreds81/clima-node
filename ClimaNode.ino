@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <ESPmDNS.h>
+#include <esp_mac.h>
 #include <RotaryEncoder.h>
 #include "time.h"
 #include "Timer.h"
@@ -19,7 +20,7 @@
 #define DHT_PIN           21
 #define DHT_TYPE          DHT22
 #define HTTP_PORT         80
-#define MDNS_HOSTNAME     "climanode"
+#define HOSTNAME_PREFIX   "climanode"
 #define ROTARY_CLK        4
 #define ROTARY_DT         22
 #define ROTARY_SW         27
@@ -41,6 +42,7 @@ enum DisplayScreen {
   SCREEN_CLIMATE,
   SCREEN_NETWORK,
   SCREEN_TIME,
+  SCREEN_NODE,
   SCREEN_COUNT
 };
 
@@ -69,6 +71,8 @@ LinkState linkState = LINK_IDLE;
 uint32_t linkStateSince = 0;
 uint8_t wifiStatus = WL_NO_SHIELD;
 bool mdnsStarted = false;
+char nodeId[13];    // MAC di fabbrica (eFuse) in esadecimale, es. "a1b2c3d4e5f6"
+char hostname[24];  // HOSTNAME_PREFIX + ultimi 3 byte del MAC, es. "climanode-d4e5f6"
 float humidity = 0.0f;
 float temperature = 0.0f;
 DisplayScreen currentScreen = SCREEN_CLIMATE;
@@ -119,6 +123,17 @@ void renderTimeScreen() {
   lcd.print(line);
 }
 
+void renderNodeScreen() {
+  char line[17];
+  snprintf(line, sizeof(line), "ID: %-12.12s", nodeId);
+  lcd.setCursor(0, 0);
+  lcd.print(line);
+
+  snprintf(line, sizeof(line), "%-16.16s", hostname);
+  lcd.setCursor(0, 1);
+  lcd.print(line);
+}
+
 void renderDisplay() {
   switch (currentScreen) {
     case SCREEN_CLIMATE:
@@ -129,6 +144,9 @@ void renderDisplay() {
       break;
     case SCREEN_TIME:
       renderTimeScreen();
+      break;
+    case SCREEN_NODE:
+      renderNodeScreen();
       break;
   }
 }
@@ -182,10 +200,10 @@ void jsonEscape(const char *src, char *dst, size_t size) {
 }
 
 void handleClimateRequest(AsyncWebServerRequest *request) {
-  char payload[64];
+  char payload[96];
   snprintf(payload, sizeof(payload),
-           "{\"temperature\":%.1f,\"humidity\":%.1f}",
-           temperature, humidity);
+           "{\"id\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f}",
+           nodeId, temperature, humidity);
   request->send(200, "application/json", payload);
 }
 
@@ -214,7 +232,7 @@ void handleStatusRequest(AsyncWebServerRequest *request) {
     snprintf(clock, sizeof(clock), "{\"synced\":false}");
   }
 
-  snprintf(payload, sizeof(payload), "{\"wifi\":%s,\"time\":%s}", wifi, clock);
+  snprintf(payload, sizeof(payload), "{\"id\":\"%s\",\"wifi\":%s,\"time\":%s}", nodeId, wifi, clock);
   request->send(200, "application/json", payload);
 }
 
@@ -228,10 +246,11 @@ void startMdns() {
     return;
   }
 
-  if (MDNS.begin(MDNS_HOSTNAME)) {
+  if (MDNS.begin(hostname)) {
     MDNS.addService("http", "tcp", HTTP_PORT);
+    MDNS.addServiceTxt("http", "tcp", "id", (const char *)nodeId);
     mdnsStarted = true;
-    Serial.printf("[MDNS] Responder started: http://%s.local/\n", MDNS_HOSTNAME);
+    Serial.printf("[MDNS] Responder started: http://%s.local/\n", hostname);
   } else {
     Serial.println("[MDNS] Error starting responder.");
   }
@@ -310,16 +329,29 @@ void updateWifiLink() {
   }
 }
 
+// Ricava ID e hostname dal MAC di fabbrica, unico per ogni chip
+void initNodeIdentity() {
+  uint8_t mac[6];
+  esp_efuse_mac_get_default(mac);
+  snprintf(nodeId, sizeof(nodeId), "%02x%02x%02x%02x%02x%02x",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  snprintf(hostname, sizeof(hostname), HOSTNAME_PREFIX "-%02x%02x%02x", mac[3], mac[4], mac[5]);
+}
+
 void setup() {
   Serial.begin(9600);
   dht.begin();
   btn.begin();
   lcd.begin(16, 2);
+  initNodeIdentity();
+  Serial.printf("[NODE] ID: %s, hostname: %s\n", nodeId, hostname);
+  // Va impostato prima di avviare il WiFi per essere usato anche dal DHCP
+  WiFi.setHostname(hostname);
   WiFi.mode(WIFI_STA);
   // Radio sempre attiva: senza modem sleep la latenza scende da ~100 ms a pochi ms
   WiFi.setSleep(false);
   // Con un indirizzo IPv6 link-local l'mDNS risponde anche alle query AAAA,
-  // evitando ai client 5 s di attesa nella risoluzione di climanode.local
+  // evitando ai client 5 s di attesa nella risoluzione di <hostname>.local
   WiFi.enableIPv6();
   // La riconnessione è gestita da updateWifiLink()
   WiFi.setAutoReconnect(false);

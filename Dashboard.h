@@ -61,7 +61,7 @@ const char DASHBOARD_HTML[] = R"HTML(
 </head>
 <body>
   <h1>ClimaNode</h1>
-  <div class="subtitle">Dashboard ambientale</div>
+  <div class="subtitle">Dashboard ambientale<span id="nodeId"></span></div>
 
   <div class="clock">
     <div class="time" id="clockTime">--:--:--</div>
@@ -153,6 +153,8 @@ async function refresh() {
       deviceTime = null;
     }
     tickClock();
+
+    document.getElementById('nodeId').textContent = ' \u00b7 ' + status.id;
 
     const wifi = status.wifi;
     const dot = document.getElementById('wifiDot');

@@ -65,20 +65,35 @@ Le credenziali WiFi non sono versionate nel repository. Prima di compilare:
 
 Apri `ClimaNode.ino` con l'Arduino IDE, seleziona la board ESP32-WROOM-32 e la porta seriale corretta, quindi carica lo sketch.
 
-Al boot il device si connette al WiFi (log disponibile su Serial a 9600 baud) e, una volta connesso, avvia anche il responder mDNS, raggiungibile come `climanode.local` sulla rete locale.
+Al boot il device si connette al WiFi (log disponibile su Serial a 9600 baud) e, una volta connesso, avvia anche il responder mDNS, raggiungibile come `climanode-XXXXXX.local` sulla rete locale.
+
+## Identificazione del nodo
+
+Ogni nodo è identificato dal MAC address di fabbrica dell'ESP32 (scritto nell'eFuse, unico per chip e indipendente dal firmware):
+
+- **ID**: il MAC in esadecimale minuscolo, es. `a1b2c3d4e5f6`. È incluso in tutte le risposte dell'API (campo `id`) e nel record TXT `id` del servizio mDNS `_http._tcp`.
+- **Hostname**: `climanode-` seguito dagli ultimi 3 byte del MAC, es. `climanode-d4e5f6`. È usato sia per mDNS (`climanode-d4e5f6.local`) sia come nome DHCP, così più nodi possono convivere sulla stessa rete.
+
+ID e hostname sono stampati su Serial all'avvio. Per elencare i nodi presenti sulla rete da macOS:
+
+```sh
+dns-sd -B _http._tcp
+```
 
 ## Display LCD
 
-Il display mostra due schermate, alternabili ruotando l'encoder (ogni scatto passa dall'una all'altra):
+Il display mostra quattro schermate, che si scorrono ruotando l'encoder in entrambe le direzioni:
 
 - **Clima**: temperatura e umidità rilevate dal DHT22.
 - **Rete**: indirizzo IP e stato della connessione WiFi.
+- **Data e ora**: data e ora correnti, sincronizzate via NTP (fuso Europe/Rome con ora legale automatica).
+- **Nodo**: ID del nodo (MAC di fabbrica) e hostname.
 
 Il pulsante integrato nell'encoder è collegato (GPIO 27) ma al momento non ha alcuna funzione.
 
 ## Dashboard web
 
-Una volta connesso alla rete, aprendo `http://climanode.local/` (o l'IP stampato su Serial) nel browser è disponibile una dashboard single-page che mostra temperatura, umidità e stato della connessione WiFi (SSID, potenza del segnale, IP, canale), aggiornata automaticamente ogni 3 secondi.
+Una volta connesso alla rete, aprendo `http://climanode-XXXXXX.local/` (o l'IP stampato su Serial) nel browser è disponibile una dashboard single-page che mostra ID del nodo, data e ora del device, temperatura, umidità e stato della connessione WiFi (SSID, potenza del segnale, IP, canale), aggiornata automaticamente ogni 3 secondi.
 
 ## API
 
@@ -89,7 +104,7 @@ GET /api/v1/climate
 ```
 
 ```json
-{"temperature":21.5,"humidity":48.2}
+{"id":"a1b2c3d4e5f6","temperature":21.5,"humidity":48.2}
 ```
 
 ```
@@ -97,16 +112,16 @@ GET /api/v1/status
 ```
 
 ```json
-{"wifi":{"connected":true,"ssid":"NomeRete","rssi":-58,"ip":"192.168.1.50","channel":6}}
+{"id":"a1b2c3d4e5f6","wifi":{"connected":true,"ssid":"NomeRete","rssi":-58,"ip":"192.168.1.50","channel":6},"time":{"synced":true,"local":"2026-10-01T14:05:32"}}
 ```
 
-Se il device non è connesso al WiFi, `wifi.connected` risulta `false` e gli altri campi sono assenti.
+Se il device non è connesso al WiFi, `wifi.connected` risulta `false` e gli altri campi sono assenti. `time.local` è l'ora locale del device in formato ISO 8601 senza offset; finché l'ora non è sincronizzata via NTP `time.synced` risulta `false` e `local` è assente.
 
 Esempio con `curl`, usando l'IP stampato su Serial oppure l'hostname mDNS:
 
 ```sh
-curl http://climanode.local/api/v1/climate
-curl http://climanode.local/api/v1/status
+curl http://climanode-d4e5f6.local/api/v1/climate
+curl http://climanode-d4e5f6.local/api/v1/status
 ```
 
 ## Licenza
