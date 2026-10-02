@@ -19,6 +19,7 @@
 #define LCD_D5            17
 #define LCD_D6            16
 #define LCD_D7            15
+#define LCD_BACKLIGHT     26
 #define DHT_PIN           21
 #define DHT_TYPE          DHT22
 #define HTTP_PORT         80
@@ -27,6 +28,7 @@
 #define ROTARY_CLK        4
 #define ROTARY_DT         22
 #define ROTARY_SW         27
+#define BACKLIGHT_TIMEOUT 30000L  // ms di inattività prima di spegnere la retroilluminazione
 
 #define NTP_SERVER        "ntp1.inrim.it"
 // Europe/Rome: CET (UTC+1), CEST (UTC+2) dall'ultima domenica di marzo all'ultima di ottobre
@@ -41,6 +43,7 @@ Timer linkTimer;
 Timer pollTimer;
 Timer clockTimer;
 Timer trendTimer;
+Timer backlightTimer;
 Trend temperatureTrend(0.3f);  // °C in TREND_WINDOW_MIN minuti
 Trend humidityTrend(2.0f);     // % in TREND_WINDOW_MIN minuti
 // Copia delle tendenze per gli handler HTTP, aggiornata dal loop() a ogni commit
@@ -87,6 +90,7 @@ char hostname[24];  // HOSTNAME_PREFIX + ultimi 3 byte del MAC, es. "climanode-d
 float humidity = 0.0f;
 float temperature = 0.0f;
 DisplayScreen currentScreen = SCREEN_CLIMATE;
+bool backlightOn = true;
 
 uint8_t trendSymbol(TrendDirection trend) {
   switch (trend) {
@@ -209,6 +213,15 @@ void renderFirmwareScreen() {
   snprintf(line, sizeof(line), "Firmware %-7s", FIRMWARE_VERSION);
   lcd.setCursor(0, 1);
   lcd.print(line);
+}
+
+// Riaccende la retroilluminazione e riavvia il timer di spegnimento
+void wakeBacklight() {
+  backlightTimer.reset();
+  if (!backlightOn) {
+    backlightOn = true;
+    digitalWrite(LCD_BACKLIGHT, HIGH);
+  }
 }
 
 void renderDisplay() {
@@ -441,6 +454,8 @@ void initNodeIdentity() {
 
 void setup() {
   Serial.begin(9600);
+  pinMode(LCD_BACKLIGHT, OUTPUT);
+  digitalWrite(LCD_BACKLIGHT, HIGH);
   dht.begin();
   btn.begin();
   lcd.begin(16, 2);
@@ -465,6 +480,7 @@ void setup() {
   pollTimer.begin(2000L);
   clockTimer.begin(250L);
   trendTimer.begin(60000L);
+  backlightTimer.begin(BACKLIGHT_TIMEOUT);
 
   httpServer.on("/", HTTP_GET, handleDashboardRequest);
   httpServer.on("/api/v1/climate", HTTP_GET, handleClimateRequest);
@@ -474,6 +490,11 @@ void setup() {
 
 void loop() {
   static int pos = 0;
+
+  if (backlightOn && backlightTimer.expired()) {
+    backlightOn = false;
+    digitalWrite(LCD_BACKLIGHT, LOW);
+  }
 
   if (linkTimer.expired()) {
     updateWifiLink();
@@ -539,19 +560,27 @@ void loop() {
   rot.tick();
   int newPos = rot.getPosition();
   if (pos != newPos) {
+    // Con il display spento la rotazione serve solo a riaccenderlo
+    bool wasOn = backlightOn;
+    wakeBacklight();
+    if (wasOn) {
+      int step = (newPos > pos) ? 1 : SCREEN_COUNT - 1;
+      currentScreen = (DisplayScreen)((currentScreen + step) % SCREEN_COUNT);
+      lcd.clear();
+      renderDisplay();
+    }
+    pos = newPos;
+
+#ifdef ROT_DEBUG
     Serial.print("pos:");
     Serial.print(newPos);
     Serial.print(" dir:");
     Serial.println((int)(rot.getDirection()));
-    int step = (newPos > pos) ? 1 : SCREEN_COUNT - 1;
-    pos = newPos;
-
-    currentScreen = (DisplayScreen)((currentScreen + step) % SCREEN_COUNT);
-    lcd.clear();
-    renderDisplay();
+#endif
   }
 
   if (btn.pressed()) {
+    wakeBacklight();
     Serial.println("Button PRESSED");
   }
 }
