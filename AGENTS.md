@@ -16,6 +16,11 @@ CLI="/Applications/Arduino IDE.app/Contents/Resources/app/lib/backend/resources/
   `"$CLI" --config-file ~/.arduinoIDE/arduino-cli.yaml lib install "<nome libreria>"`
 - Serve un `Secrets.h` (copia di `Secrets.h.example`), altrimenti la compilazione fallisce.
 
+## Naming convention
+
+- Macro (`#define`) e costanti: MAIUSCOLO con underscore (`LCD_RS`, `DHT_PIN`, `HTTP_PORT`, `DASHBOARD_HTML`).
+- Variabili, comprese le istanze globali di oggetti: minuscolo o camelCase (`lcd`, `dht`, `btn`, `httpServer`, `temperatureTrend`). Non usare il MAIUSCOLO per indicare che una variabile è globale: si confonderebbe con le macro (es. `LCD` con `LCD_RS`, `LCD_DEGREE`) e rischierebbe collisioni con le macro definite dalle librerie.
+
 ## Server HTTP (ESPAsyncWebServer)
 
 Gli handler HTTP (`handleClimateRequest`, `handleStatusRequest`, `handleDashboardRequest`, ...) vengono eseguiti nel task di AsyncTCP, **in parallelo al `loop()`**, non al suo interno.
