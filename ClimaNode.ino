@@ -5,6 +5,8 @@
 #include <ESPmDNS.h>
 #include <esp_mac.h>
 #include <RotaryEncoder.h>
+#include <TinyGPSPlus.h>
+#include <sys/time.h>
 #include "time.h"
 #include "Timer.h"
 #include "Secrets.h"
@@ -29,6 +31,11 @@
 #define ROTARY_DT         22
 #define ROTARY_SW         27
 #define BACKLIGHT_TIMEOUT 30000L  // ms di inattività prima di spegnere la retroilluminazione
+// GPIO34 è solo ingresso e non è un pin di strapping: adatto all'RX dal GPS
+#define GPS_RX            34
+#define GPS_TX            13
+#define GPS_BAUD          9600
+#define GPS_MAX_AGE       3000  // ms oltre i quali un dato del GPS è considerato vecchio
 
 #define NTP_SERVER        "ntp1.inrim.it"
 // Europe/Rome: CET (UTC+1), CEST (UTC+2) dall'ultima domenica di marzo all'ultima di ottobre
@@ -44,6 +51,8 @@ Timer pollTimer;
 Timer clockTimer;
 Timer trendTimer;
 Timer backlightTimer;
+Timer gpsTimer;
+TinyGPSPlus gps;
 Trend temperatureTrend(0.3f);  // °C in TREND_WINDOW_MIN minuti
 Trend humidityTrend(2.0f);     // % in TREND_WINDOW_MIN minuti
 // Copia delle tendenze per gli handler HTTP, aggiornata dal loop() a ogni commit
@@ -55,10 +64,24 @@ enum DisplayScreen {
   SCREEN_NETWORK,
   SCREEN_SIGNAL,
   SCREEN_TIME,
+  SCREEN_GPS,
   SCREEN_NODE,
   SCREEN_FIRMWARE,
   SCREEN_COUNT
 };
+
+// Stato del GPS aggiornato dal loop() e letto anche dagli handler HTTP
+struct GpsInfo {
+  bool fix;
+  uint32_t satellites;
+  double latitude;
+  double longitude;
+  double altitude;  // m s.l.m.
+  double hdop;
+};
+
+GpsInfo gpsInfo = {};
+portMUX_TYPE gpsMux = portMUX_INITIALIZER_UNLOCKED;
 
 struct KnownNetwork {
   const char *ssid;
@@ -194,6 +217,35 @@ void renderTimeScreen() {
   lcd.print(line);
 }
 
+GpsInfo readGpsInfo() {
+  taskENTER_CRITICAL(&gpsMux);
+  GpsInfo info = gpsInfo;
+  taskEXIT_CRITICAL(&gpsMux);
+  return info;
+}
+
+void renderGpsScreen() {
+  GpsInfo info = readGpsInfo();
+  char line[17];
+
+  if (!info.fix) {
+    lcd.setCursor(0, 0);
+    lcd.print("GPS: ricerca... ");
+    snprintf(line, sizeof(line), "Satelliti: %-5lu", (unsigned long)info.satellites);
+    lcd.setCursor(0, 1);
+    lcd.print(line);
+    return;
+  }
+
+  snprintf(line, sizeof(line), "Lat: %9.5f %c", fabs(info.latitude), info.latitude < 0 ? 'S' : 'N');
+  lcd.setCursor(0, 0);
+  lcd.print(line);
+
+  snprintf(line, sizeof(line), "Lon: %9.5f %c", fabs(info.longitude), info.longitude < 0 ? 'W' : 'E');
+  lcd.setCursor(0, 1);
+  lcd.print(line);
+}
+
 void renderNodeScreen() {
   char line[17];
   snprintf(line, sizeof(line), "ID: %-12.12s", nodeId);
@@ -237,6 +289,9 @@ void renderDisplay() {
       break;
     case SCREEN_TIME:
       renderTimeScreen();
+      break;
+    case SCREEN_GPS:
+      renderGpsScreen();
       break;
     case SCREEN_NODE:
       renderNodeScreen();
@@ -311,19 +366,31 @@ const char *trendName(TrendDirection trend) {
 }
 
 void handleClimateRequest(AsyncWebServerRequest *request) {
-  char payload[160];
+  char location[96];
+  char payload[256];
+
+  // Posizione della misura; null finché il GPS non ha il fix
+  GpsInfo info = readGpsInfo();
+  if (info.fix) {
+    snprintf(location, sizeof(location), "{\"latitude\":%.6f,\"longitude\":%.6f,\"altitude\":%.1f}",
+             info.latitude, info.longitude, info.altitude);
+  } else {
+    snprintf(location, sizeof(location), "null");
+  }
+
   snprintf(payload, sizeof(payload),
            "{\"id\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f,"
-           "\"trend\":{\"temperature\":\"%s\",\"humidity\":\"%s\"}}",
+           "\"trend\":{\"temperature\":\"%s\",\"humidity\":\"%s\"},\"location\":%s}",
            nodeId, temperature, humidity,
-           trendName(temperatureDirection), trendName(humidityDirection));
+           trendName(temperatureDirection), trendName(humidityDirection), location);
   request->send(200, "application/json", payload);
 }
 
 void handleStatusRequest(AsyncWebServerRequest *request) {
   char wifi[320];
   char clock[64];
-  char payload[448];
+  char receiver[64];
+  char payload[640];
 
   if (WiFi.status() == WL_CONNECTED) {
     char ssid[32 * 6 + 1];  // SSID max 32 byte, ognuno al più \u00XX
@@ -345,8 +412,18 @@ void handleStatusRequest(AsyncWebServerRequest *request) {
     snprintf(clock, sizeof(clock), "{\"synced\":false}");
   }
 
-  snprintf(payload, sizeof(payload), "{\"id\":\"%s\",\"firmware\":\"%s\",\"wifi\":%s,\"time\":%s}",
-           nodeId, FIRMWARE_VERSION, wifi, clock);
+  GpsInfo info = readGpsInfo();
+  if (info.fix) {
+    snprintf(receiver, sizeof(receiver), "{\"fix\":true,\"satellites\":%lu,\"hdop\":%.1f}",
+             (unsigned long)info.satellites, info.hdop);
+  } else {
+    snprintf(receiver, sizeof(receiver), "{\"fix\":false,\"satellites\":%lu}",
+             (unsigned long)info.satellites);
+  }
+
+  snprintf(payload, sizeof(payload),
+           "{\"id\":\"%s\",\"firmware\":\"%s\",\"wifi\":%s,\"time\":%s,\"gps\":%s}",
+           nodeId, FIRMWARE_VERSION, wifi, clock, receiver);
   request->send(200, "application/json", payload);
 }
 
@@ -443,6 +520,59 @@ void updateWifiLink() {
   }
 }
 
+// Secondi dal 1/1/1970 di una data UTC (algoritmo days_from_civil di H. Hinnant)
+time_t utcToEpoch(int year, int month, int day, int hour, int minute, int second) {
+  year -= month <= 2;
+  int era = year / 400;
+  int yoe = year - era * 400;
+  int doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+  int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  long days = era * 146097L + doe - 719468;
+  return (time_t)days * 86400 + hour * 3600 + minute * 60 + second;
+}
+
+// Se l'orologio non è ancora stato impostato (es. NTP non raggiungibile) usa l'ora del GPS
+void syncClockFromGps() {
+  struct tm timeInfo;
+  if (getLocalTime(&timeInfo, 0)) {
+    return;
+  }
+  // Senza fix data e ora possono essere vuote o quelle del RTC interno del modulo
+  if (!gps.location.isValid() || gps.time.age() > GPS_MAX_AGE || gps.date.year() < 2024) {
+    return;
+  }
+
+  struct timeval now = {
+    .tv_sec = utcToEpoch(gps.date.year(), gps.date.month(), gps.date.day(),
+                         gps.time.hour(), gps.time.minute(), gps.time.second()),
+    .tv_usec = 0
+  };
+  settimeofday(&now, nullptr);
+  Serial.println("[GPS] Clock set from GPS.");
+}
+
+void updateGpsInfo() {
+  GpsInfo info = {};
+  info.fix = gps.location.isValid() && gps.location.age() < GPS_MAX_AGE;
+  info.satellites = gps.satellites.isValid() ? gps.satellites.value() : 0;
+  if (info.fix) {
+    info.latitude = gps.location.lat();
+    info.longitude = gps.location.lng();
+    info.altitude = gps.altitude.meters();
+    info.hdop = gps.hdop.hdop();
+  }
+
+  taskENTER_CRITICAL(&gpsMux);
+  gpsInfo = info;
+  taskEXIT_CRITICAL(&gpsMux);
+
+#ifdef GPS_DEBUG
+  Serial.printf("[GPS] fix: %d, sat: %lu, lat: %.6f, lon: %.6f, chars: %lu, bad checksum: %lu\n",
+                info.fix, (unsigned long)info.satellites, info.latitude, info.longitude,
+                (unsigned long)gps.charsProcessed(), (unsigned long)gps.failedChecksum());
+#endif
+}
+
 // Ricava ID e hostname dal MAC di fabbrica, unico per ogni chip
 void initNodeIdentity() {
   uint8_t mac[6];
@@ -454,6 +584,9 @@ void initNodeIdentity() {
 
 void setup() {
   Serial.begin(9600);
+  // Margine per le pause del loop(): a 9600 baud il GPS manda circa 1 KB/s
+  Serial1.setRxBufferSize(1024);
+  Serial1.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
   pinMode(LCD_BACKLIGHT, OUTPUT);
   digitalWrite(LCD_BACKLIGHT, HIGH);
   dht.begin();
@@ -475,12 +608,16 @@ void setup() {
   WiFi.enableIPv6();
   // La riconnessione è gestita da updateWifiLink()
   WiFi.setAutoReconnect(false);
+  // Fuso orario impostato subito, così vale anche per l'ora presa dal GPS prima dell'NTP
+  setenv("TZ", TIME_ZONE, 1);
+  tzset();
   startWifiScan();
   linkTimer.begin(1000L);
   pollTimer.begin(2000L);
   clockTimer.begin(250L);
   trendTimer.begin(60000L);
   backlightTimer.begin(BACKLIGHT_TIMEOUT);
+  gpsTimer.begin(1000L);
 
   httpServer.on("/", HTTP_GET, handleDashboardRequest);
   httpServer.on("/api/v1/climate", HTTP_GET, handleClimateRequest);
@@ -582,5 +719,19 @@ void loop() {
   if (btn.pressed()) {
     wakeBacklight();
     Serial.println("Button PRESSED");
+  }
+
+  // Il parser va alimentato a ogni giro per non perdere caratteri
+  while (Serial1.available() > 0) {
+    gps.encode(Serial1.read());
+  }
+
+  if (gpsTimer.expired()) {
+    gpsTimer.reset();
+    updateGpsInfo();
+    syncClockFromGps();
+    if (currentScreen == SCREEN_GPS) {
+      renderGpsScreen();
+    }
   }
 }

@@ -51,6 +51,7 @@ const char DASHBOARD_HTML[] = R"HTML(
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
   .dot.ok { background: var(--ok); }
   .dot.err { background: var(--err); }
+  .row a { color: var(--accent); text-decoration: none; }
   .bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 14px; margin-right: 6px; }
   .bars span { width: 4px; background: rgba(148,163,184,0.3); border-radius: 1px; display: inline-block; }
   .bars span.on { background: var(--accent); }
@@ -91,6 +92,17 @@ const char DASHBOARD_HTML[] = R"HTML(
     </span></div>
     <div class="row"><span class="k">Indirizzo IP</span><span id="wifiIp">--</span></div>
     <div class="row"><span class="k">Canale</span><span id="wifiChannel">--</span></div>
+  </div>
+
+  <div class="status">
+    <h2>Posizione GPS</h2>
+    <div class="row"><span class="k">Fix</span><span><span class="dot err" id="gpsDot"></span><span id="gpsState">--</span></span></div>
+    <div class="row"><span class="k">Satelliti</span><span id="gpsSatellites">--</span></div>
+    <div class="row"><span class="k">Latitudine</span><span id="gpsLatitude">--</span></div>
+    <div class="row"><span class="k">Longitudine</span><span id="gpsLongitude">--</span></div>
+    <div class="row"><span class="k">Altitudine</span><span id="gpsAltitude">--</span></div>
+    <div class="row"><span class="k">HDOP</span><span id="gpsHdop">--</span></div>
+    <div class="row"><span class="k">Mappa</span><span id="gpsMap">--</span></div>
   </div>
 
   <footer id="lastUpdate">In attesa di dati...</footer>
@@ -140,6 +152,41 @@ const TRENDS = {
 function trendHtml(trend) {
   const t = TRENDS[trend];
   return t ? '<span class="trend ' + trend + '" title="' + t.title + ' negli ultimi 10 minuti">' + t.symbol + '</span>' : '';
+}
+
+// Coordinata in gradi decimali con emisfero, es. "45.464230° N"
+function coordinate(value, positive, negative) {
+  return Math.abs(value).toFixed(6) + '\u00b0 ' + (value < 0 ? negative : positive);
+}
+
+// Stato del ricevitore da /api/v1/status, posizione da /api/v1/climate
+function renderGps(gps, location) {
+  const fix = !!(gps && gps.fix);
+  document.getElementById('gpsDot').className = fix ? 'dot ok' : 'dot err';
+  document.getElementById('gpsState').textContent = !gps ? 'Non disponibile' : fix ? 'Acquisito' : 'Ricerca satelliti...';
+  document.getElementById('gpsSatellites').textContent = gps ? gps.satellites : '--';
+
+  document.getElementById('gpsHdop').textContent = fix ? gps.hdop.toFixed(1) : '--';
+
+  const map = document.getElementById('gpsMap');
+  if (!location) {
+    ['gpsLatitude', 'gpsLongitude', 'gpsAltitude'].forEach(id => document.getElementById(id).textContent = '--');
+    map.textContent = '--';
+    return;
+  }
+
+  document.getElementById('gpsLatitude').textContent = coordinate(location.latitude, 'N', 'S');
+  document.getElementById('gpsLongitude').textContent = coordinate(location.longitude, 'E', 'W');
+  document.getElementById('gpsAltitude').textContent = location.altitude.toFixed(1) + ' m';
+
+  const lat = location.latitude.toFixed(6);
+  const lon = location.longitude.toFixed(6);
+  const link = document.createElement('a');
+  link.href = 'https://www.openstreetmap.org/?mlat=' + lat + '&mlon=' + lon + '#map=17/' + lat + '/' + lon;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  link.textContent = 'Apri su OpenStreetMap';
+  map.replaceChildren(link);
 }
 
 async function refresh() {
@@ -195,6 +242,8 @@ async function refresh() {
       document.getElementById('wifiRssi').textContent = '--';
       bars.forEach(bar => bar.classList.remove('on'));
     }
+
+    renderGps(status.gps, climate.location);
 
     document.getElementById('lastUpdate').textContent = 'Ultimo aggiornamento: ' + new Date().toLocaleTimeString();
   } catch (e) {
