@@ -30,12 +30,11 @@
 #define ROTARY_CLK        4
 #define ROTARY_DT         22
 #define ROTARY_SW         27
-#define BACKLIGHT_TIMEOUT 30000L  // ms di inattività prima di spegnere la retroilluminazione
-// GPIO34 è solo ingresso e non è un pin di strapping: adatto all'RX dal GPS
+#define BACKLIGHT_TIMEOUT 30000L
 #define GPS_RX            34
 #define GPS_TX            13
 #define GPS_BAUD          9600
-#define GPS_MAX_AGE       3000  // ms oltre i quali un dato del GPS è considerato vecchio
+#define GPS_MAX_AGE       3000
 
 #define NTP_SERVER        "ntp1.inrim.it"
 // Europe/Rome: CET (UTC+1), CEST (UTC+2) dall'ultima domenica di marzo all'ultima di ottobre
@@ -55,7 +54,6 @@ Timer gpsTimer;
 TinyGPSPlus gps;
 Trend temperatureTrend(0.3f);  // °C in TREND_WINDOW_MIN minuti
 Trend humidityTrend(2.0f);     // % in TREND_WINDOW_MIN minuti
-// Copia delle tendenze per gli handler HTTP, aggiornata dal loop() a ogni commit
 volatile TrendDirection temperatureDirection = TREND_UNKNOWN;
 volatile TrendDirection humidityDirection = TREND_UNKNOWN;
 
@@ -70,7 +68,6 @@ enum DisplayScreen {
   SCREEN_COUNT
 };
 
-// Stato del GPS aggiornato dal loop() e letto anche dagli handler HTTP
 struct GpsInfo {
   bool fix;
   uint32_t satellites;
@@ -93,7 +90,6 @@ const KnownNetwork knownNetworks[] = {
   { WIFI_SSID_2, WIFI_PASS_2 }
 };
 
-// Stati della connessione WiFi, gestita senza bloccare il loop()
 enum LinkState {
   LINK_IDLE,        // in attesa del prossimo tentativo
   LINK_SCANNING,    // scansione asincrona in corso
@@ -128,7 +124,6 @@ uint8_t trendSymbol(TrendDirection trend) {
   }
 }
 
-// Scrive una riga " <icona>  <valore>    <tendenza> " di 16 caratteri
 void printClimateLine(uint8_t row, uint8_t icon, const char *value, TrendDirection trend) {
   lcd.setCursor(0, row);
   lcd.print(' ');
@@ -161,7 +156,6 @@ void renderNetworkScreen() {
   lcd.print(WiFi.status() == WL_CONNECTED ? "WiFi: Connesso  " : "WiFi: Assente   ");
 }
 
-// Soglie RSSI allineate a quelle delle barre della dashboard
 const char *signalQuality(int rssi) {
   if (rssi >= -55) return "ottimo";
   if (rssi >= -65) return "buono";
@@ -198,7 +192,7 @@ void renderSignalScreen() {
 
 void renderTimeScreen() {
   struct tm timeInfo;
-  // timeout 0: non bloccare il loop finché l'orario non è sincronizzato
+  
   if (!getLocalTime(&timeInfo, 0)) {
     lcd.setCursor(0, 0);
     lcd.print("Ora non sincr.  ");
@@ -267,7 +261,6 @@ void renderFirmwareScreen() {
   lcd.print(line);
 }
 
-// Riaccende la retroilluminazione e riavvia il timer di spegnimento
 void wakeBacklight() {
   backlightTimer.reset();
   if (!backlightOn) {
@@ -428,7 +421,6 @@ void handleStatusRequest(AsyncWebServerRequest *request) {
 }
 
 void handleDashboardRequest(AsyncWebServerRequest *request) {
-  // Servita direttamente dalla flash, senza copiarla in RAM
   request->send(200, "text/html", (const uint8_t *)DASHBOARD_HTML, sizeof(DASHBOARD_HTML) - 1);
 }
 
@@ -458,7 +450,6 @@ void startWifiScan() {
   setLinkState(LINK_SCANNING);
 }
 
-// Sceglie tra le reti note quella con il segnale migliore e avvia la connessione
 void connectBestNetwork(int found) {
   int bestIndex = -1;
   const KnownNetwork *bestNetwork = nullptr;
@@ -534,10 +525,11 @@ time_t utcToEpoch(int year, int month, int day, int hour, int minute, int second
 // Se l'orologio non è ancora stato impostato (es. NTP non raggiungibile) usa l'ora del GPS
 void syncClockFromGps() {
   struct tm timeInfo;
+
   if (getLocalTime(&timeInfo, 0)) {
     return;
   }
-  // Senza fix data e ora possono essere vuote o quelle del RTC interno del modulo
+  
   if (!gps.location.isValid() || gps.time.age() > GPS_MAX_AGE || gps.date.year() < 2024) {
     return;
   }
@@ -584,34 +576,34 @@ void initNodeIdentity() {
 
 void setup() {
   Serial.begin(9600);
-  // Margine per le pause del loop(): a 9600 baud il GPS manda circa 1 KB/s
   Serial1.setRxBufferSize(1024);
   Serial1.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
+
   pinMode(LCD_BACKLIGHT, OUTPUT);
   digitalWrite(LCD_BACKLIGHT, HIGH);
+  
   dht.begin();
   btn.begin();
+  
   lcd.begin(16, 2);
   lcd.createChar(ICON_THERMOMETER, thermometerGlyph);
   lcd.createChar(ICON_DROP, dropGlyph);
   lcd.createChar(ICON_TREND_UP, trendUpGlyph);
   lcd.createChar(ICON_TREND_DOWN, trendDownGlyph);
+  
   initNodeIdentity();
   Serial.printf("[NODE] ID: %s, hostname: %s, firmware: %s\n", nodeId, hostname, FIRMWARE_VERSION);
-  // Va impostato prima di avviare il WiFi per essere usato anche dal DHCP
+  
   WiFi.setHostname(hostname);
   WiFi.mode(WIFI_STA);
-  // Radio sempre attiva: senza modem sleep la latenza scende da ~100 ms a pochi ms
   WiFi.setSleep(false);
-  // Con un indirizzo IPv6 link-local l'mDNS risponde anche alle query AAAA,
-  // evitando ai client 5 s di attesa nella risoluzione di <hostname>.local
   WiFi.enableIPv6();
-  // La riconnessione è gestita da updateWifiLink()
-  WiFi.setAutoReconnect(false);
-  // Fuso orario impostato subito, così vale anche per l'ora presa dal GPS prima dell'NTP
-  setenv("TZ", TIME_ZONE, 1);
+  WiFi.setAutoReconnect(false);  // La riconnessione è gestita da updateWifiLink()
+  
+  setenv("TZ", TIME_ZONE, 1);    // Fuso orario impostato subito, così vale anche per l'ora presa dal GPS prima dell'NTP
   tzset();
   startWifiScan();
+  
   linkTimer.begin(1000L);
   pollTimer.begin(2000L);
   clockTimer.begin(250L);
@@ -721,7 +713,6 @@ void loop() {
     Serial.println("Button PRESSED");
   }
 
-  // Il parser va alimentato a ogni giro per non perdere caratteri
   while (Serial1.available() > 0) {
     gps.encode(Serial1.read());
   }
